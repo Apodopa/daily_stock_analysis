@@ -33,14 +33,52 @@ concurrency:
 
 jobs:
   analyze:
+    name: 分析 Group-${{ matrix.group }}
     runs-on: ubuntu-latest
+    # 矩阵并行：4 个行业分组同时跑，互不阻塞
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [A, B, C, D]
     # 添加超时限制，防止任务卡死
     timeout-minutes: ${{ fromJSON(vars.ANALYSIS_TIMEOUT_MINUTES || '30') }}
-    
+
     steps:
-      - name: 随机延迟（避免固定时间访问）
-        run: sleep $((RANDOM % 60))  # 随机延迟0-60秒启动
-      
+      - name: 配置分组参数（股票池 + 默认模式）
+        run: |
+          case "${{ matrix.group }}" in
+            A)
+              echo "STOCK_LIST=${{ secrets.STOCK_LIST_A }}" >> $GITHUB_ENV
+              echo "GROUP_DEFAULT_MODE=full" >> $GITHUB_ENV
+              echo "GROUP_LABEL=A · 光通信" >> $GITHUB_ENV
+              ;;
+            B)
+              echo "STOCK_LIST=${{ secrets.STOCK_LIST_B }}" >> $GITHUB_ENV
+              echo "GROUP_DEFAULT_MODE=stocks-only" >> $GITHUB_ENV
+              echo "GROUP_LABEL=B · PCB/电子" >> $GITHUB_ENV
+              ;;
+            C)
+              echo "STOCK_LIST=${{ secrets.STOCK_LIST_C }}" >> $GITHUB_ENV
+              echo "GROUP_DEFAULT_MODE=stocks-only" >> $GITHUB_ENV
+              echo "GROUP_LABEL=C · 半导体/显示材料" >> $GITHUB_ENV
+              ;;
+            D)
+              echo "STOCK_LIST=${{ secrets.STOCK_LIST_D }}" >> $GITHUB_ENV
+              echo "GROUP_DEFAULT_MODE=stocks-only" >> $GITHUB_ENV
+              echo "GROUP_LABEL=D · 新能源/汽车/其他" >> $GITHUB_ENV
+              ;;
+          esac
+
+      - name: 随机延迟（避免 4 组同时打 LLM）
+        run: |
+          # 错峰：A=0-15s, B=15-30s, C=30-45s, D=45-60s
+          case "${{ matrix.group }}" in
+            A) sleep $((RANDOM % 15)) ;;
+            B) sleep $((15 + RANDOM % 15)) ;;
+            C) sleep $((30 + RANDOM % 15)) ;;
+            D) sleep $((45 + RANDOM % 15)) ;;
+          esac
+
       - name: 检出代码
         uses: actions/checkout@v5
       
@@ -343,9 +381,8 @@ jobs:
           NOTIFICATION_DAILY_DIGEST_ENABLED: ${{ vars.NOTIFICATION_DAILY_DIGEST_ENABLED || secrets.NOTIFICATION_DAILY_DIGEST_ENABLED || 'false' }}
 
           # ==========================================
-          # 自选股配置
+          # 自选股配置（STOCK_LIST 由前置「配置分组参数」步骤注入到 $GITHUB_ENV）
           # ==========================================
-          STOCK_LIST: ${{ vars.STOCK_LIST || secrets.STOCK_LIST || '600519' }}
           MARKET_REVIEW_REGION: ${{ vars.MARKET_REVIEW_REGION || secrets.MARKET_REVIEW_REGION || 'cn' }}
           MARKET_REVIEW_COLOR_SCHEME: ${{ vars.MARKET_REVIEW_COLOR_SCHEME || secrets.MARKET_REVIEW_COLOR_SCHEME || 'green_up' }}
           
@@ -384,14 +421,16 @@ jobs:
           fi
 
           # 判断运行模式
-          MODE="${{ github.event.inputs.mode || 'full' }}"
-          
+          # 优先级：手动 dispatch 的 mode > 分组默认 mode > full
+          INPUT_MODE="${{ github.event.inputs.mode }}"
+          MODE="${INPUT_MODE:-${GROUP_DEFAULT_MODE:-full}}"
+
           echo "=========================================="
-          echo "🚀 A股自选股智能分析系统"
+          echo "🚀 A股自选股智能分析系统 - Group ${GROUP_LABEL}"
           echo "=========================================="
           echo "⏰ 时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
-          echo "🎯 运行模式: $MODE"
-          echo "📊 自选股: $STOCK_LIST"
+          echo "🎯 运行模式: $MODE (分组默认=${GROUP_DEFAULT_MODE})"
+          echo "📊 自选股 [${GROUP_LABEL}]: $STOCK_LIST"
           echo "📝 报告类型: $REPORT_TYPE"
           echo ""
           echo "=========================================="
@@ -466,7 +505,7 @@ jobs:
         uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: analysis-reports-${{ github.run_number }}
+          name: analysis-reports-${{ github.run_number }}-group-${{ matrix.group }}
           path: |
             reports/
             logs/
