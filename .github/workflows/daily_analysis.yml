@@ -35,9 +35,10 @@ jobs:
   analyze:
     name: 分析 Group-${{ matrix.group }}
     runs-on: ubuntu-latest
-    # 矩阵并行：4 个行业分组同时跑，互不阻塞
+    # 矩阵串行：4 个行业分组依次跑（适配 MiniMax Coding Plan 单 Key 并发限制）
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         group: [A, B, C, D]
     # 添加超时限制，防止任务卡死
@@ -69,15 +70,8 @@ jobs:
               ;;
           esac
 
-      - name: 随机延迟（避免 4 组同时打 LLM）
-        run: |
-          # 错峰：A=0-15s, B=15-30s, C=30-45s, D=45-60s
-          case "${{ matrix.group }}" in
-            A) sleep $((RANDOM % 15)) ;;
-            B) sleep $((15 + RANDOM % 15)) ;;
-            C) sleep $((30 + RANDOM % 15)) ;;
-            D) sleep $((45 + RANDOM % 15)) ;;
-          esac
+      - name: 随机延迟
+        run: sleep $((RANDOM % 30))  # 0-30s，避免固定时间访问
 
       - name: 检出代码
         uses: actions/checkout@v5
@@ -421,9 +415,15 @@ jobs:
           fi
 
           # 判断运行模式
-          # 优先级：手动 dispatch 的 mode > 分组默认 mode > full
-          INPUT_MODE="${{ github.event.inputs.mode }}"
-          MODE="${INPUT_MODE:-${GROUP_DEFAULT_MODE:-full}}"
+          # schedule 触发 → 总是用分组默认（A=full, B/C/D=stocks-only）
+          # workflow_dispatch 触发 → 由 vars.RESPECT_INPUT_MODE 控制
+          #   未设置或 false：仍走分组默认（避免手动测试时刷屏 4 次大盘复盘）
+          #   设置为 true：手动选择的 mode 覆盖所有分组（用于强制全跑）
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ vars.RESPECT_INPUT_MODE }}" = "true" ]; then
+            MODE="${{ github.event.inputs.mode || 'full' }}"
+          else
+            MODE="${GROUP_DEFAULT_MODE:-full}"
+          fi
 
           echo "=========================================="
           echo "🚀 A股自选股智能分析系统 - Group ${GROUP_LABEL}"
