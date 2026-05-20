@@ -1,0 +1,51 @@
+name: Keep Alive
+
+# 防止 Fork 仓库 schedule 被 GitHub 静默禁用
+# 每天 UTC 23:30 = 北京时间 07:30 = 美东时间 19:30(前一天 EDT)运行
+# 通过更新 .github/.keepalive 文件保持仓库活跃,确保 daily_analysis.yml 的 schedule 持续触发
+
+on:
+  schedule:
+    - cron: '30 23 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    name: 保活提交
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - name: 更新 keepalive 时间戳并提交
+        run: |
+          mkdir -p .github
+          BJT=$(TZ='Asia/Shanghai' date "+%Y-%m-%d %H:%M:%S")
+          UTC=$(date -u "+%Y-%m-%d %H:%M:%S")
+          cat > .github/.keepalive <<TXT
+          Keep-alive timestamp for forked repository.
+          This file is auto-updated daily to prevent GitHub from disabling
+          scheduled workflows in fork repositories.
+
+          Last update:
+            UTC: ${UTC}
+            BJT: ${BJT} (北京时间)
+          TXT
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/.keepalive
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: keepalive $(TZ='Asia/Shanghai' date +%Y-%m-%d)"
+            git push
+            echo "Keepalive commit pushed."
+          fi
